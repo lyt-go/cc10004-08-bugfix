@@ -1,5 +1,15 @@
 import { MODULE_BY_KEY } from '@/data/modules'
-import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { allRows, listRows, resetRows, saveRows, transact } from '@/data/local-store'
+import {
+  applyArchiveReport,
+  applyCampaignTransition,
+  applyConfirmReport,
+  applySubmitCalculation,
+  evaluateRoiConfirmation,
+  todayText,
+  type ConfirmEvaluation,
+  type StoreDraft,
+} from '@/domain/roi-settlement'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -28,11 +38,65 @@ export function listEntries(key: string, filters: Record<string, string> = {}): 
   return { items: matched, total: matched.length, page: 1, size: matched.length }
 }
 
+/**
+ * 跨模块事务执行器：mutator 在整库草稿上校验并改写，
+ * 返回 ok=false 或写盘异常时整体退回，不留半截状态。
+ */
+function transactAction(mutator: (draft: StoreDraft) => ActionResult): ActionResult {
+  let result: ActionResult = { ok: false, message: '操作未执行' }
+  try {
+    transact((draft) => {
+      result = mutator(draft)
+      return result.ok
+    })
+  } catch (error) {
+    return {
+      ok: false,
+      message: `写入失败，已整体退回：${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+  return result
+}
+
+/** 报告确认页数据：并列展示活动侧与报告侧，以及逐项准入核对结果。 */
+export function prepareRoiConfirmation(id: number): ConfirmEvaluation {
+  return evaluateRoiConfirmation(allRows(), id)
+}
+
+/** 确认报告：核对活动可结算、批次一致后才写入，报告与活动状态同事务提交。 */
+export function confirmRoiReport(id: number): ActionResult {
+  return transactAction((draft) => applyConfirmReport(draft, id, todayText()))
+}
+
+function runRoiAction(id: number, action: string): ActionResult {
+  if (action === '提交计算') {
+    return transactAction((draft) => applySubmitCalculation(draft, id, todayText()))
+  }
+  if (action === '确认报告') {
+    return confirmRoiReport(id)
+  }
+  if (action === '归档报告') {
+    return transactAction((draft) => applyArchiveReport(draft, id))
+  }
+  return { ok: false, message: `ROI报告没有登记「${action}」这个动作` }
+}
+
+function runCampaignAction(id: number, action: string): ActionResult {
+  return transactAction((draft) => applyCampaignTransition(draft, id, action))
+}
+
 export function runAction(key: string, id: number, action: string): ActionResult {
   const meta = moduleMeta(key)
   const target = meta.actionTargets[action]
   if (!target) {
     return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }
+  }
+  // 投放活动与ROI报告走准入链：只能按登记的状态链推进，且跨模块写入同事务完成。
+  if (key === 'campaign') {
+    return runCampaignAction(id, action)
+  }
+  if (key === 'roi') {
+    return runRoiAction(id, action)
   }
   const rows = listRows(key)
   const index = rows.findIndex((row) => Number(row.id) === id)

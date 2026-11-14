@@ -4,47 +4,23 @@ import { downloadEntries, listEntries, moduleMeta, runAction as applyAction } fr
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('campaign')
-const columns = [
-  "活动编号",
-  "活动名称",
-  "关联渠道",
-  "开始日期",
-  "结束日期",
-  "日预算",
-  "目标ROI",
-  "投放人群"
-]
-const actions = [
-  "提交活动审批",
-  "开始投放",
-  "暂停投放"
-]
-const statuses = [
-  "草稿",
-  "活动审批中",
-  "投放中",
-  "已结束",
-  "已暂停"
-]
-const stats = [
-  {
-    "label": "投放活动总数",
-    "value": 0
-  },
-  {
-    "label": "投放中活动",
-    "value": 0
-  },
-  {
-    "label": "已结束活动",
-    "value": 0
+const columns = meta.fields
+const actions = meta.actions
+const statuses = meta.statuses
+
+function cellText(row: EntryRow, column: string): string | number {
+  const value = row[column]
+  if (value === undefined || value === null || value === '') {
+    return '—'
   }
-]
+  return typeof value === 'boolean' ? String(value) : value
+}
 
 export default function CampaignView() {
   const [rows, setRows] = useState<EntryRow[]>([])
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
+  const [infoMessage, setInfoMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
   const filterFields = useMemo(() => columns.slice(0, 3), [])
 
@@ -65,13 +41,21 @@ export default function CampaignView() {
 
   function runAction(action: string, row: EntryRow) {
     setErrorMessage('')
+    setInfoMessage('')
     const result = applyAction(meta.key, Number(row.id), action)
     if (!result.ok) {
       setErrorMessage(result.message)
       return
     }
+    setInfoMessage(result.message)
     reload()
   }
+
+  const statItems = [
+    { label: '投放活动总数', value: rows.length },
+    { label: '投放中活动', value: rows.filter((row) => String(row.status) === '投放中').length },
+    { label: '已结束活动', value: rows.filter((row) => String(row.status) === '已结束').length },
+  ]
 
   return (
     <section className="page" data-module="campaign">
@@ -91,7 +75,7 @@ export default function CampaignView() {
       </header>
 
       <div className="stat-row">
-        {stats.map((item) => (
+        {statItems.map((item) => (
           <article key={item.label} className="stat-card">
             <span className="stat-label">{item.label}</span>
             <strong className="stat-value">{item.value}</strong>
@@ -133,7 +117,7 @@ export default function CampaignView() {
         <tbody>
           {rows.map((row) => (
             <tr key={String(row.id)}>
-              {columns.map((column) => <td key={column}>{row[column] ?? '—'}</td>)}
+              {columns.map((column) => <td key={column}>{cellText(row, column)}</td>)}
               <td>{row.status}</td>
               <td className="row-actions">
                 {actions.map((action) => (
@@ -154,6 +138,7 @@ export default function CampaignView() {
 
       <footer className="page-foot">
         <span>共 {total} 条投放活动记录</span>
+        {infoMessage && <span className="info-text">{infoMessage}</span>}
         {errorMessage && <span className="error-text">{errorMessage}</span>}
       </footer>
     </section>
